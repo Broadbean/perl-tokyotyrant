@@ -1,0 +1,557 @@
+#-------------------------------------------------------------------------------------------------
+# Pure Perl interface of Tokyo Tyrant
+#                                                                Copyright (C) 2006-2010 FAL Labs
+#  This file is part of Tokyo Tyrant.
+#  Tokyo Tyrant is free software; you can redistribute it and/or modify it under the terms of
+#  the GNU Lesser General Public License as published by the Free Software Foundation; either
+#  version 2.1 of the License or any later version.  Tokyo Tyrant is distributed in the hope
+#  that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public
+#  License for more details.
+#  You should have received a copy of the GNU Lesser General Public License along with Tokyo
+#  Tyrant; if not, write to the Free Software Foundation, Inc., 59 Temple Place, Suite 330,
+#  Boston, MA 02111-1307 USA.
+#-------------------------------------------------------------------------------------------------
+
+
+=head1 NAME
+
+TokyoTyrant - Pure Perl Interface of Tokyo Tyrant
+
+
+=head1 SYNOPSYS
+
+ use TokyoTyrant;
+
+
+=head1 INTRODUCTION
+
+This module implements the pure Perl client which connects to the server of Tokyo Tyrant and speaks its original binary protocol.
+
+Tokyo Tyrant is a package of network interface to the DBM called Tokyo Cabinet.  Though the DBM has high performance, you might bother in case that multiple processes share the same database, or remote processes access the database.  Thus, Tokyo Tyrant is provided for concurrent and remote connections to Tokyo Cabinet.  It is composed of the server process managing a database and its access library for client applications.
+
+The server features high concurrency due to thread-pool modeled implementation and the epoll/kqueue mechanism of the modern Linux/*BSD kernel.  The server and its clients communicate with each other by simple binary protocol on TCP/IP.  Protocols compatible with memcached and HTTP/1.1 are also supported so that almost all principal platforms and programming languages can use Tokyo Tyrant.  High availability and high integrity are also featured due to such mechanisms as hot backup, update logging, and replication.  The server can embed Lua, a lightweight script language so that you can define arbitrary operations of the database.
+
+Because the server uses the abstract API of Tokyo Cabinet, all of the six APIs: the on-memory hash database API, the on-memory tree database API, the hash API, the B+ tree database API, the fixed-length database API, and the table database API, are available from the client with the common interface.  Moreover, the table extension is provided to use specifidc features of the table database.
+
+=head2 Setting
+
+Get this package and extract it.
+
+Enter the directory of the extracted package then perform installation.
+
+ perl Makefile.PL
+ make
+ su
+ make install
+
+The package `TokyoTyrant' should be loaded in each source file of application programs.
+
+ use TokyoTyrant;
+
+If you want to enable runtime assertion, set the variable `$TokyoTyrant::DEBUG' to be true.
+
+ $TokyoTyrant::DEBUG = 1;
+
+
+=head1 EXAMPLE
+
+The following code is an example to use a remote database.
+
+ use TokyoTyrant;
+ use strict;
+ use warnings;
+ 
+ # create the object
+ my $rdb = TokyoTyrant::RDB->new();
+ 
+ # connect to the server
+ if(!$rdb->open("localhost", 1978)){
+     my $ecode = $rdb->ecode();
+     printf STDERR ("open error: %s\n", $rdb->errmsg($ecode));
+ }
+ 
+ # store records
+ if(!$rdb->put("foo", "hop") ||
+    !$rdb->put("bar", "step") ||
+    !$rdb->put("baz", "jump")){
+     my $ecode = $rdb->ecode();
+     printf STDERR ("put error: %s\n", $rdb->errmsg($ecode));
+ }
+ 
+ # retrieve records
+ my $value = $rdb->get("foo");
+ if(defined($value)){
+     printf("%s\n", $value);
+ } else {
+     my $ecode = $rdb->ecode();
+     printf STDERR ("get error: %s\n", $rdb->errmsg($ecode));
+ }
+ 
+ # traverse records
+ $rdb->iterinit();
+ while(defined(my $key = $rdb->iternext())){
+     my $value = $rdb->get($key);
+     if(defined($value)){
+         printf("%s:%s\n", $key, $value);
+     }
+ }
+ 
+ # close the connection
+ if(!$rdb->close()){
+     my $ecode = $rdb->ecode();
+     printf STDERR ("close error: %s\n", $rdb->errmsg($ecode));
+ }
+ 
+ # tying usage
+ my %hash;
+ if(!tie(%hash, "TokyoTyrant::RDB", "localhost", 1978)){
+     printf STDERR ("tie error\n");
+ }
+ $hash{"quux"} = "touchdown";
+ printf("%s\n", $hash{"quux"});
+ while(my ($key, $value) = each(%hash)){
+     printf("%s:%s\n", $key, $value);
+ }
+ untie(%hash);
+
+The following code is an example to use a remote database with the table extension.
+
+ use TokyoTyrant;
+ use strict;
+ use warnings;
+ 
+ # create the object
+ my $rdb = TokyoTyrant::RDBTBL->new();
+ 
+ # connect to the server
+ if(!$rdb->open("localhost", 1978)){
+     my $ecode = $rdb->ecode();
+     printf STDERR ("open error: %s\n", $rdb->errmsg($ecode));
+ }
+ 
+ # store a record
+ my $pkey = $rdb->genuid();
+ my $cols = { "name" => "mikio", "age" => "30", "lang" => "ja,en,c" };
+ if(!$rdb->put($pkey, $cols)){
+     my $ecode = $rdb->ecode();
+     printf STDERR ("put error: %s\n", $rdb->errmsg($ecode));
+ }
+ 
+ # store another record
+ $cols = { "name" => "falcon", "age" => "31", "lang" => "ja", "skill" => "cook,blog" };
+ if(!$rdb->put("x12345", $cols)){
+     my $ecode = $rdb->ecode();
+     printf STDERR ("put error: %s\n", $rdb->errmsg($ecode));
+ }
+ 
+ # search for records
+ my $qry = TokyoTyrant::RDBQRY->new($rdb);
+ $qry->addcond("age", $qry->QCNUMGE, "20");
+ $qry->addcond("lang", $qry->QCSTROR, "ja,en");
+ $qry->setorder("name", $qry->QOSTRASC);
+ $qry->setlimit(10);
+ my $res = $qry->search();
+ foreach my $rkey (@$res){
+     my $rcols = $rdb->get($rkey);
+     printf("name:%s\n", $rcols->{name});
+ }
+ 
+ # close the connection
+ if(!$rdb->close()){
+     my $ecode = $rdb->ecode();
+     printf STDERR ("close error: %s\n", $rdb->errmsg($ecode));
+ }
+
+
+=head1 DESCRIPTION
+
+=head2 Class TokyoTyrant::RDB
+
+Remote database is a set of interfaces to use an abstract database of Tokyo Cabinet, mediated by a server of Tokyo Tyrant.  Before operations to store or retrieve records, it is necessary to connect the remote database object to the server.  The method `open' is used to open a database connection and the method `close' is used to close the connection.
+
+=over
+
+=item $rdb = TokyoTyrant::RDB-E<gt>newZ<>()
+
+E<10>Create a remote database object.
+E<10>The return value is the new remote database object.
+
+=item $rdb-E<gt>errmsgZ<>(I<ecode>)
+
+E<10>Get the message string corresponding to an error code.
+E<10>`I<ecode>' specifies the error code.  If it is not defined or negative, the last happened error code is specified.
+E<10>The return value is the message string of the error code.
+
+=item $rdb-E<gt>ecodeZ<>()
+
+E<10>Get the last happened error code.
+E<10>The return value is the last happened error code.
+E<10>The following error code is defined: `$rdb-E<gt>ESUCCESS' for success, `$rdb-E<gt>EINVALID' for invalid operation, `$rdb-E<gt>ENOHOST' for host not found, `$rdb-E<gt>EREFUSED' for connection refused, `$rdb-E<gt>ESEND' for send error, `$rdb-E<gt>ERECV' for recv error, `$rdb-E<gt>EKEEP' for existing record, `$rdb-E<gt>ENOREC' for no record found, `$rdb-E<gt>EMISC' for miscellaneous error.
+
+=item $rdb-E<gt>openZ<>(I<host>, I<port>, I<timeout>)
+
+E<10>Open a remote database connection.
+E<10>`I<host>' specifies the name or the address of the server.
+E<10>`I<port>' specifies the port number.  If it is not defined or not more than 0, UNIX domain socket is used and the path of the socket file is specified by the host parameter.
+E<10>`I<timeout>' specifies the timeout of each query in seconds.  If it is not defined or not more than 0, the timeout is not specified.
+E<10>If successful, the return value is true, else, it is false.
+
+=item $rdb-E<gt>closeZ<>()
+
+E<10>Close the database connection.
+E<10>If successful, the return value is true, else, it is false.
+
+=item $rdb-E<gt>putZ<>(I<key>, I<value>)
+
+E<10>Store a record.
+E<10>`I<key>' specifies the key.
+E<10>`I<value>' specifies the value.
+E<10>If successful, the return value is true, else, it is false.
+E<10>If a record with the same key exists in the database, it is overwritten.
+
+=item $rdb-E<gt>putkeepZ<>(I<key>, I<value>)
+
+E<10>Store a new record.
+E<10>`I<key>' specifies the key.
+E<10>`I<value>' specifies the value.
+E<10>If successful, the return value is true, else, it is false.
+E<10>If a record with the same key exists in the database, this method has no effect.
+
+=item $rdb-E<gt>putcatZ<>(I<key>, I<value>)
+
+E<10>Concatenate a value at the end of the existing record.
+E<10>`I<key>' specifies the key.
+E<10>`I<value>' specifies the value.
+E<10>If successful, the return value is true, else, it is false.
+E<10>If there is no corresponding record, a new record is created.
+
+=item $rdb-E<gt>putshlZ<>(I<key>, I<value>, I<width>)
+
+E<10>Concatenate a value at the end of the existing record and shift it to the left.
+E<10>`I<key>' specifies the key.
+E<10>`I<value>' specifies the value.
+E<10>`I<width>' specifies the width of the record.
+E<10>If successful, the return value is true, else, it is false.
+E<10>If there is no corresponding record, a new record is created.
+
+=item $rdb-E<gt>putnrZ<>(I<key>, I<value>)
+
+E<10>Store a record without response from the server.
+E<10>`I<key>' specifies the key.
+E<10>`I<value>' specifies the value.
+E<10>If successful, the return value is true, else, it is false.
+E<10>If a record with the same key exists in the database, it is overwritten.
+
+=item $rdb-E<gt>outZ<>(I<key>)
+
+E<10>Remove a record.
+E<10>`I<key>' specifies the key.
+E<10>If successful, the return value is true, else, it is false.
+
+=item $rdb-E<gt>getZ<>(I<key>)
+
+E<10>Retrieve a record.
+E<10>`I<key>' specifies the key.
+E<10>If successful, the return value is the value of the corresponding record.  `undef' is returned if no record corresponds.
+
+=item $rdb-E<gt>mgetZ<>(I<recs>)
+
+E<10>Retrieve records.
+E<10>`I<recs>' specifies the reference to a hash containing the retrieval keys.  As a result of this method, keys existing in the database have the corresponding values and keys not existing in the database are removed.
+E<10>If successful, the return value is the number of retrieved records or -1 on failure.
+
+=item $rdb-E<gt>vsizZ<>(I<key>)
+
+E<10>Get the size of the value of a record.
+E<10>`I<key>' specifies the key.
+E<10>If successful, the return value is the size of the value of the corresponding record, else, it is -1.
+
+=item $rdb-E<gt>iterinitZ<>()
+
+E<10>Initialize the iterator.
+E<10>If successful, the return value is true, else, it is false.
+E<10>The iterator is used in order to access the key of every record stored in a database.
+
+=item $rdb-E<gt>iternextZ<>()
+
+E<10>Get the next key of the iterator.
+E<10>If successful, the return value is the next key, else, it is `undef'.  `undef' is returned when no record is to be get out of the iterator.
+E<10>It is possible to access every record by iteration of calling this method.  It is allowed to update or remove records whose keys are fetched while the iteration.  However, it is not assured if updating the database is occurred while the iteration.  Besides, the order of this traversal access method is arbitrary, so it is not assured that the order of storing matches the one of the traversal access.
+
+=item $rdb-E<gt>fwmkeysZ<>(I<prefix>, I<max>)
+
+E<10>Get forward matching keys.
+E<10>`I<prefix>' specifies the prefix of the corresponding keys.
+E<10>`I<max>' specifies the maximum number of keys to be fetched.  If it is not defined or negative, no limit is specified.
+E<10>The return value is the reference to an array of the keys of the corresponding records.  This method does never fail.  It returns an empty array even if no record corresponds.
+E<10>Note that this method may be very slow because every key in the database is scanned.
+
+=item $rdb-E<gt>addintZ<>(I<key>, I<num>)
+
+E<10>Add an integer to a record.
+E<10>`I<key>' specifies the key.
+E<10>`I<num>' specifies the additional value.  If it is not defined, 0 is specified.
+E<10>If successful, the return value is the summation value, else, it is `undef'.
+E<10>If the corresponding record exists, the value is treated as an integer and is added to.  If no record corresponds, a new record of the additional value is stored.  Because records are stored in binary format, they should be processed with the `unpack' function with the `i' operator after retrieval.
+
+=item $rdb-E<gt>adddoubleZ<>(I<key>, I<num>)
+
+E<10>Add a real number to a record.
+E<10>`I<key>' specifies the key.
+E<10>`I<num>' specifies the additional value.  If it is not defined, 0 is specified.
+E<10>If successful, the return value is the summation value, else, it is `undef'.
+E<10>If the corresponding record exists, the value is treated as a real number and is added to.  If no record corresponds, a new record of the additional value is stored.  Because records are stored in binary format, they should be processed with the `unpack' function with the `d' operator after retrieval.
+
+=item $rdb-E<gt>extZ<>(I<name>, I<key>, I<value>, I<opts>)
+
+E<10>Call a function of the script language extension.
+E<10>`I<name>' specifies the function name..
+E<10>`I<key>' specifies the key.  If it is not defined, an empty string is specified.
+E<10>`I<value>' specifies the value.  If it is not defined, an empty string is specified.
+E<10>`I<opts>' specifies options by bitwise-or: `$rdb-E<gt>XOLCKREC' for record locking, `$rdb-E<gt>XOLCKGLB' for global locking.  If it is not defined, no option is specified.
+E<10>If successful, the return value is the value of the response or `undef' on failure.
+
+=item $rdb-E<gt>syncZ<>()
+
+E<10>Synchronize updated contents with the file and the device.
+E<10>If successful, the return value is true, else, it is false.
+
+=item $rdb-E<gt>optimizeZ<>(I<params>)
+
+E<10>Optimize the storage.
+E<10>`I<params>' specifies the string of the tuning parameters.  If it is not defined, it is not used.
+E<10>If successful, the return value is true, else, it is false.
+
+=item $rdb-E<gt>vanishZ<>()
+
+E<10>Remove all records.
+E<10>If successful, the return value is true, else, it is false.
+
+=item $rdb-E<gt>copyZ<>(I<path>)
+
+E<10>Copy the database file.
+E<10>`I<path>' specifies the path of the destination file.  If it begins with `@', the trailing substring is executed as a command line.
+E<10>If successful, the return value is true, else, it is false.  False is returned if the executed command returns non-zero code.
+E<10>The database file is assured to be kept synchronized and not modified while the copying or executing operation is in progress.  So, this method is useful to create a backup file of the database file.
+
+=item $rdb-E<gt>rnumZ<>()
+
+E<10>Get the number of records.
+E<10>The return value is the number of records or 0 if the object does not connect to any database server.
+
+=item $rdb-E<gt>sizeZ<>()
+
+E<10>Get the size of the database.
+E<10>The return value is the size of the database or 0 if the object does not connect to any database server.
+
+=item $rdb-E<gt>statZ<>()
+
+E<10>Get the status string of the database server.
+E<10>The return value is the status message of the database or `undef' if the object does not connect to any database server.  The message format is TSV.  The first field of each line means the parameter name and the second field means the value.
+
+=item $rdb-E<gt>miscZ<>(I<name>, I<args>, I<opts>)
+
+E<10>Call a versatile function for miscellaneous operations.
+E<10>`I<name>' specifies the name of the function.  All databases support "putlist", "outlist", and "getlist".  "putlist" is to store records.  It receives keys and values one after the other, and returns an empty list.  "outlist" is to remove records.  It receives keys, and returns an empty array.  "getlist" is to retrieve records.  It receives keys, and returns keys and values of corresponding records one after the other.  Table database supports "setindex", "search", and "genuid".
+E<10>`I<args>' specifies the reference to an array of arguments.  If it is not defined, no argument is specified.
+E<10>`I<opts>' specifies options by bitwise-or: `$rdb-E<gt>MONOULOG' for omission of the update log.  If it is not defined, no option is specified.
+E<10>If successful, the return value is the reference to an array of the result.  `undef' is returned on failure.
+
+=back
+
+=head2 Tying functions of TokyoTyrant::RDB
+
+=over
+
+=item tieZ<>(%hash, E<quot>TokyoTyrant::RDBE<quot>, I<host>, I<port>)
+
+E<10>Tie a hash variable to a remote database file.
+E<10>`I<host>' specifies the name or the address of the server.
+E<10>`I<port>' specifies the port number.  If it is not defined or not more than 0, UNIX domain socket is used and the path of the socket file is specified by the host parameter.
+E<10>If successful, the return value is true, else, it is false.
+
+=item untieZ<>(%hash)
+
+E<10>Untie a hash variable from the database connection.
+E<10>The return value is always true.
+
+=item $hash{I<key>} = I<value>
+
+E<10>Store a record.
+E<10>`I<key>' specifies the key.
+E<10>`I<value>' specifies the value.
+E<10>If successful, the return value is true, else, it is false.
+E<10>If a record with the same key exists in the database, it is overwritten.
+
+=item delete($hash{I<key>})
+
+E<10>Remove a record.
+E<10>`I<key>' specifies the key.
+E<10>If successful, the return value is true, else, it is false.
+
+=item $hash{I<key>}
+
+E<10>Retrieve a record.
+E<10>`I<key>' specifies the key.
+E<10>If successful, the return value is the value of the corresponding record.  `undef' is returned if no record corresponds.
+
+=item exists($hash{I<key>})
+
+E<10>Check whether a record corrsponding a key exists.
+E<10>`I<key>' specifies the key.
+E<10>The return value is true if the record exists, else it is false.
+
+=item $hash = Z<>()
+
+E<10>Remove all records.
+E<10>The return value is always `undef'.
+
+=item Z<>(the iterator)
+
+E<10>The inner methods `FIRSTKEY' and `NEXTKEY' are also implemented so that you can use the tying functions `each', `keys', and so on.
+
+=back
+
+=head2 Class TokyoTyrant::RDBTBL
+
+This class inherits the class "TokyoTyrant::RDB".  All methods are specific to servers of the table database.
+
+=over
+
+=item $rdb-E<gt>putZ<>(I<pkey>, I<cols>)
+
+E<10>Store a record.
+E<10>`I<pkey>' specifies the primary key.
+E<10>`I<cols>' specifies the reference to a hash containing columns.
+E<10>If successful, the return value is true, else, it is false.
+E<10>If a record with the same key exists in the database, it is overwritten.
+
+=item $rdb-E<gt>putkeepZ<>(I<pkey>, I<cols>)
+
+E<10>Store a new record.
+E<10>`I<pkey>' specifies the primary key.
+E<10>`I<cols>' specifies the reference to a hash containing columns.
+E<10>If successful, the return value is true, else, it is false.
+E<10>If a record with the same key exists in the database, this method has no effect.
+
+=item $rdb-E<gt>putcatZ<>(I<pkey>, I<cols>)
+
+E<10>Concatenate columns of the existing record.
+E<10>`I<pkey>' specifies the primary key.
+E<10>`I<cols>' specifies the reference to a hash containing columns.
+E<10>If successful, the return value is true, else, it is false.
+E<10>If there is no corresponding record, a new record is created.
+
+=item $rdb-E<gt>outZ<>(I<pkey>)
+
+E<10>Remove a record.
+E<10>`I<pkey>' specifies the primary key.
+E<10>If successful, the return value is true, else, it is false.
+
+=item $rdb-E<gt>getZ<>(I<pkey>)
+
+E<10>Retrieve a record.
+E<10>`I<pkey>' specifies the primary key.
+E<10>If successful, the return value is the reference to a hash of the columns of the corresponding record.  `undef' is returned if no record corresponds.
+
+=item $rdb-E<gt>mgetZ<>(I<recs>)
+
+E<10>Retrieve records.
+E<10>`I<recs>' specifies the reference to a hash containing the retrieval keys.  As a result of this method, keys existing in the database have the corresponding columns and keys not existing in the database are removed.
+E<10>If successful, the return value is the number of retrieved records or -1 on failure.
+E<10>Due to the protocol restriction, this method can not handle records with binary columns including the "\0" chracter.
+
+=item $rdb-E<gt>setindexZ<>(I<name>, I<type>)
+
+E<10>Set a column index.
+E<10>`I<name>' specifies the name of a column.  If the name of an existing index is specified, the index is rebuilt.  An empty string means the primary key.
+E<10>`I<type>' specifies the index type: `$rdb-E<gt>ITLEXICAL' for lexical string, `$rdb-E<gt>ITDECIMAL' for decimal string, `$rdb-E<gt>ITTOKEN' for token inverted index, `$rdb-E<gt>ITQGRAM' for q-gram inverted index.  If it is `$rdb-E<gt>ITOPT', the index is optimized.  If it is `$rdb-E<gt>ITVOID', the index is removed.  If `$rdb-E<gt>ITKEEP' is added by bitwise-or and the index exists, this method merely returns failure.
+E<10>If successful, the return value is true, else, it is false.
+
+=item $rdb-E<gt>genuidZ<>()
+
+E<10>Generate a unique ID number.
+E<10>The return value is the new unique ID number or -1 on failure.
+
+=back
+
+=head2 Class TokyoTyrant::RDBQRY
+
+This class is a helper for the class "TokyoTyrant::RDBTBL".
+
+=over
+
+=item $qry = TokyoTyrant::RDBQRY-E<gt>newZ<>(I<rdb>)
+
+E<10>Create a query object.
+E<10>`I<rdb>' specifies the remote database object.
+E<10>The return value is the new query object.
+
+=item $qry-E<gt>addcondZ<>(I<name>, I<op>, I<expr>)
+
+E<10>Add a narrowing condition.
+E<10>`I<name>' specifies the name of a column.  An empty string means the primary key.
+E<10>`I<op>' specifies an operation type: `$qry-E<gt>QCSTREQ' for string which is equal to the expression, `$qry-E<gt>QCSTRINC' for string which is included in the expression, `$qry-E<gt>QCSTRBW' for string which begins with the expression, `$qry-E<gt>QCSTREW' for string which ends with the expression, `$qry-E<gt>QCSTRAND' for string which includes all tokens in the expression, `$qry-E<gt>QCSTROR' for string which includes at least one token in the expression, `$qry-E<gt>QCSTROREQ' for string which is equal to at least one token in the expression, `$qry-E<gt>QCSTRRX' for string which matches regular expressions of the expression, `$qry-E<gt>QCNUMEQ' for number which is equal to the expression, `$qry-E<gt>QCNUMGT' for number which is greater than the expression, `$qry-E<gt>QCNUMGE' for number which is greater than or equal to the expression, `$qry-E<gt>QCNUMLT' for number which is less than the expression, `$qry-E<gt>QCNUMLE' for number which is less than or equal to the expression, `$qry-E<gt>QCNUMBT' for number which is between two tokens of the expression, `$qry-E<gt>QCNUMOREQ' for number which is equal to at least one token in the expression, `$qry-E<gt>QCFTSPH' for full-text search with the phrase of the expression, `$qry-E<gt>QCFTSAND' for full-text search with all tokens in the expression, `$qry-E<gt>QCFTSOR' for full-text search with at least one token in the expression, `$qry-E<gt>QCFTSEX' for full-text search with the compound expression.  All operations can be flagged by bitwise-or: `$qry-E<gt>QCNEGATE' for negation, `$qry-E<gt>QCNOIDX' for using no index.
+E<10>`I<expr>' specifies an operand exression.
+E<10>The return value is always `undef'.
+
+=item $qry-E<gt>setorderZ<>(I<name>, I<type>)
+
+E<10>Set the order of the result.
+E<10>`I<name>' specifies the name of a column.  An empty string means the primary key.
+E<10>`I<type>' specifies the order type: `$qry-E<gt>QOSTRASC' for string ascending, `$qry-E<gt>QOSTRDESC' for string descending, `$qry-E<gt>QONUMASC' for number ascending, `$qry-E<gt>QONUMDESC' for number descending.  If it is not defined, `$qry-E<gt>QOSTRASC' is specified.
+E<10>The return value is always `undef'.
+
+=item $qry-E<gt>setlimitZ<>(I<max>)
+
+E<10>Set the maximum number of records of the result.
+E<10>`I<max>' specifies the maximum number of records of the result.  If it is not defined or negative, no limit is specified.
+E<10>`I<skip>' specifies the number of skipped records of the result.  If it is not defined or not more than 0, no record is skipped.
+E<10>The return value is always `undef'.
+
+=item $qry-E<gt>searchZ<>()
+
+E<10>Execute the search.
+E<10>The return value is the reference to an array of the primary keys of the corresponding records.  This method does never fail.  It returns an empty array even if no record corresponds.
+
+=item $qry-E<gt>searchoutZ<>()
+
+E<10>Remove each corresponding record.
+E<10>If successful, the return value is true, else, it is false.
+
+=item $qry-E<gt>searchgetZ<>(I<names>)
+
+E<10>Get records corresponding to the search.
+E<10>`I<names>' specifies the reference to an array of column names to be fetched.  An empty string means the primary key.  If it is not defined, every column is fetched.
+E<10>The return value is an array of the references to column hashes of the corresponding records.  This method does never fail.  It returns an empty list even if no record corresponds.
+E<10>Due to the protocol restriction, this method can not handle records with binary columns including the "\0" chracter.
+
+=item $qry-E<gt>searchcountZ<>()
+
+E<10>Get the count of corresponding records.
+E<10>The return value is the count of corresponding records or 0 on failure.
+
+=item $qry-E<gt>hintZ<>()
+
+E<10>Get the hint string.
+E<10>The return value is the hint string.
+
+=item $qry-E<gt>metasearchZ<>(I<others>, I<type>)
+
+E<10>Retrieve records with multiple query objects and get the set of the result.
+E<10>`I<others>' specifies the reference to an array of the query objects except for the self object.
+E<10>`I<type>' specifies a set operation type: `$qry-E<gt>MSUNION' for the union set, `$qry-E<gt>MSISECT' for the intersection set, `$qry-E<gt>MSDIFF' for the difference set.  If it is not defined, `$qry-E<gt>MSUNION' is specified.
+E<10>The return value is the reference to an array of the primary keys of the corresponding records.  This method does never fail.  It returns an empty array even if no record corresponds.
+E<10>If the first query object has the order setting, the result array is sorted by the order.
+
+=back
+
+
+=head1 LICENSE
+
+ Copyright (C) 2006-2010 FAL Labs
+ All rights reserved.
+
+Tokyo Tyrant is free software; you can redistribute it and/or modify it under the terms of the GNU Lesser General Public License as published by the Free Software Foundation; either version 2.1 of the License or any later version.  Tokyo Tyrant is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more details.  You should have received a copy of the GNU Lesser General Public License along with Tokyo Tyrant; if not, write to the Free Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.

@@ -1,0 +1,10 @@
+MANIFEST
+Makefile.PL
+TokyoTyrant.pm
+TokyoTyrant.pod
+tcrtest.pl
+ttutest.pl
+example/tcrdbex.pl
+test.pl
+COPYING
+META.yml                                 Module meta-data (added by MakeMaker)
